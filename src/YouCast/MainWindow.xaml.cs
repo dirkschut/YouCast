@@ -53,6 +53,7 @@ namespace YouCast
                 AddressList.First(ip => ip.AddressFamily == AddressFamily.InterNetwork).ToString();
 
             PopulateQualities();
+            LoadApiSettings();
             LoadNetworkSettings();
         }
 
@@ -64,6 +65,12 @@ namespace YouCast
             }
 
             Quality.SelectedIndex = 0;
+        }
+
+        private void LoadApiSettings()
+        {
+            ApplicationName.Text = Settings.Default.ApplicationName;
+            ApiKey.Text = Settings.Default.ApiKey;
         }
 
         private void LoadNetworkSettings()
@@ -209,7 +216,11 @@ namespace YouCast
 
         private void OpenServiceHost()
         {
-            _serviceHost = new WebServiceHost(typeof(YoutubeFeed));
+            _serviceHost =
+                new WebServiceHost(
+                    new YoutubeFeed(
+                        Settings.Default.ApplicationName,
+                        Settings.Default.ApiKey));
             _serviceHost.AddServiceEndpoint(typeof(IYoutubeFeed), new WebHttpBinding(), new Uri(_baseAddress));
 
             try
@@ -357,6 +368,15 @@ namespace YouCast
 
             SetNetworkSettings(host, port);
             LoadNetworkSettings();
+            UpdateLocalService();
+        }
+
+        private void SetApiSettings(object sender, RoutedEventArgs e)
+        {
+            Settings.Default.ApplicationName = ApplicationName.Text;
+            Settings.Default.ApiKey = ApiKey.Text;
+            Settings.Default.Save();
+
             UpdateLocalService();
         }
 

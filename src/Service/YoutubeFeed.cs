@@ -9,39 +9,35 @@ using System.Threading.Tasks;
 using System.Xml.Linq;
 using Google.Apis.Services;
 using Google.Apis.YouTube.v3.Data;
-using Humanizer;
 using MoreLinq;
 using YoutubeExplode;
-using YoutubeExplode.Models.MediaStreams;
 using Video = Google.Apis.YouTube.v3.Data.Video;
 using YouTubeService = Google.Apis.YouTube.v3.YouTubeService;
 
 namespace Service
 {
-    [ServiceBehavior(ConcurrencyMode = ConcurrencyMode.Multiple, UseSynchronizationContext = false)]
+    [ServiceBehavior(
+        ConcurrencyMode = ConcurrencyMode.Multiple,
+        InstanceContextMode = InstanceContextMode.Single,
+        UseSynchronizationContext = false)]
     public sealed class YoutubeFeed : IYoutubeFeed
     {
         private const string _channelUrlFormat = "http://www.youtube.com/channel/{0}";
         private const string _videoUrlFormat = "http://www.youtube.com/watch?v={0}";
         private const string _playlistUrlFormat = "http://www.youtube.com/playlist?list={0}";
 
-        private readonly Cache<Arguments, SyndicationFeedFormatter> _feedCache;
-        private readonly Cache<(string videoId, string encoding), string> _contentCache;
         private readonly YoutubeClient _youtubeClient;
         private readonly YouTubeService _youtubeService;
 
-        public YoutubeFeed()
+        public YoutubeFeed(string applicationName, string apiKey)
         {
-            _feedCache = new Cache<Arguments, SyndicationFeedFormatter>(15.Minutes());
-            _contentCache = new Cache<(string videoId, string encoding), string>(2.Hours());
-
             _youtubeClient = new YoutubeClient();
             _youtubeService =
                 new YouTubeService(
                     new BaseClientService.Initializer
                     {
-                        ApiKey = "AIzaSyANb4I8D4P18fh0GFzk0O_GV6i6XbnJt4Q",
-                        ApplicationName = "YouCast2020"
+                        ApiKey = apiKey,
+                        ApplicationName = applicationName
                     });
         }
 
@@ -51,47 +47,54 @@ namespace Service
             int maxLength,
             bool isPopular)
         {
-            var baseAddress = GetBaseAddress();
+            return await GetFeedFormatterAsync(GetFeedAsync);
 
-            const string fields = "items(contentDetails,id,snippet)";
-            var listRequestForUsername = _youtubeService.Channels.List("snippet,contentDetails");
-            listRequestForUsername.ForUsername = userId;
-            listRequestForUsername.MaxResults = 1;
-            listRequestForUsername.Fields = fields;
-
-            var listRequestForId = _youtubeService.Channels.List("snippet,contentDetails");
-            listRequestForId.Id = userId;
-            listRequestForId.MaxResults = 1;
-            listRequestForId.Fields = fields;
-
-            var channel = (await Task.WhenAll(listRequestForUsername.ExecuteAsync(), listRequestForId.ExecuteAsync())).
-                SelectMany(_ => _.Items).
-                First();
-
-            var arguments = new Arguments(
-                channel.ContentDetails.RelatedPlaylists.Uploads,
-                encoding,
-                maxLength,
-                isPopular);
-
-            if (_feedCache.TryGet(arguments, out var formatter))
+            async Task<ItunesFeed> GetFeedAsync(string baseAddress)
             {
-                return formatter;
+                var channel =
+                    await GetChannelAsync(userId) ??
+                    await FindChannelAsync(userId);
+
+                var arguments = new Arguments(
+                    channel.ContentDetails.RelatedPlaylists.Uploads,
+                    encoding,
+                    maxLength,
+                    isPopular);
+
+                return new ItunesFeed(
+                    GetTitle(channel.Snippet.Title, arguments),
+                    channel.Snippet.Description,
+                    new Uri(string.Format(_channelUrlFormat, channel.Id)))
+                {
+                    ImageUrl = new Uri(channel.Snippet.Thumbnails.Medium.Url),
+                    Items = await GenerateItemsAsync(
+                        baseAddress,
+                        channel.Snippet.PublishedAt.GetValueOrDefault(),
+                        arguments)
+                };
             }
 
-            var feed = new ItunesFeed(
-                GetTitle(channel.Snippet.Title, arguments),
-                channel.Snippet.Description,
-                new Uri(string.Format(_channelUrlFormat, channel.Id)))
+            async Task<Channel> GetChannelAsync(string id)
             {
-                ImageUrl = new Uri(channel.Snippet.Thumbnails.Medium.Url),
-                Items = await GenerateItemsAsync(
-                    baseAddress,
-                    channel.Snippet.PublishedAt.GetValueOrDefault(),
-                    arguments),
-            };
+                var listRequestForId = _youtubeService.Channels.List("snippet,contentDetails");
+                listRequestForId.Id = id;
+                listRequestForId.MaxResults = 1;
+                listRequestForId.Fields = "items(contentDetails,id,snippet)";
 
-            return CacheFeed(arguments, feed);
+                var channelListResponse = await listRequestForId.ExecuteAsync();
+                return channelListResponse.Items?.Single();
+            }
+
+            async Task<Channel> FindChannelAsync(string username)
+            {
+                var listRequestForUsername = _youtubeService.Channels.List("snippet,contentDetails");
+                listRequestForUsername.ForUsername = username;
+                listRequestForUsername.MaxResults = 1;
+                listRequestForUsername.Fields = "items(contentDetails,id,snippet)";
+
+                var channelListResponse = await listRequestForUsername.ExecuteAsync();
+                return channelListResponse.Items?.Single();
+            }
         }
 
         public async Task<SyndicationFeedFormatter> GetPlaylistFeedAsync(
@@ -100,43 +103,40 @@ namespace Service
             int maxLength,
             bool isPopular)
         {
-            var baseAddress = GetBaseAddress();
+            return await GetFeedFormatterAsync(GetFeedAsync);
 
-            var arguments = new Arguments(
-                playlistId,
-                encoding,
-                maxLength,
-                isPopular);
-
-            if (_feedCache.TryGet(arguments, out var formatter))
+            async Task<ItunesFeed> GetFeedAsync(string baseAddress)
             {
-                return formatter;
+                var arguments =
+                    new Arguments(
+                        playlistId,
+                        encoding,
+                        maxLength,
+                        isPopular);
+
+                var playlistRequest = _youtubeService.Playlists.List("snippet");
+                playlistRequest.Id = playlistId;
+                playlistRequest.MaxResults = 1;
+
+                var playlist = (await playlistRequest.ExecuteAsync()).Items.First();
+
+                return new ItunesFeed(
+                    GetTitle(playlist.Snippet.Title, arguments),
+                    playlist.Snippet.Description,
+                    new Uri(string.Format(_playlistUrlFormat, playlist.Id)))
+                {
+                    ImageUrl = new Uri(playlist.Snippet.Thumbnails.Medium.Url),
+                    Items = await GenerateItemsAsync(
+                        baseAddress,
+                        playlist.Snippet.PublishedAt.GetValueOrDefault(),
+                        arguments)
+                };
             }
-
-            var playlistRequest = _youtubeService.Playlists.List("snippet");
-            playlistRequest.Id = playlistId;
-            playlistRequest.MaxResults = 1;
-
-            var playlist = (await playlistRequest.ExecuteAsync()).Items.First();
-
-            var feed = new ItunesFeed(
-                GetTitle(playlist.Snippet.Title, arguments),
-                playlist.Snippet.Description,
-                new Uri(string.Format(_playlistUrlFormat, playlist.Id)))
-            {
-                ImageUrl = new Uri(playlist.Snippet.Thumbnails.Medium.Url),
-                Items = await GenerateItemsAsync(
-                    baseAddress,
-                    playlist.Snippet.PublishedAt.GetValueOrDefault(),
-                    arguments),
-            };
-
-            return CacheFeed(arguments, feed);
         }
 
         public async Task GetVideoAsync(string videoId, string encoding)
         {
-            await GetContentAsync(videoId, encoding, GetVideoUriAsync);
+            await GetContentAsync(GetVideoUriAsync);
 
             async Task<string> GetVideoUriAsync()
             {
@@ -149,10 +149,11 @@ namespace Service
                 {
                 }
 
-                var streamInfoSet = await _youtubeClient.GetVideoMediaStreamInfosAsync(videoId);
+                var streamManifest = await _youtubeClient.Videos.Streams.GetManifestAsync(videoId);
+                var muxedStreamInfos = streamManifest.GetMuxedStreams().ToList();
                 var muxedStreamInfo =
-                    streamInfoSet.Muxed.FirstOrDefault(_ => _.VideoQuality.GetResolution() == resolution) ??
-                    streamInfoSet.Muxed.WithHighestVideoQuality();
+                    muxedStreamInfos.FirstOrDefault(_ => _.VideoResolution.Height == resolution) ??
+                    muxedStreamInfos.MaxBy(_ => _.VideoQuality);
 
                 return muxedStreamInfo?.Url;
             }
@@ -160,28 +161,34 @@ namespace Service
 
         public async Task GetAudioAsync(string videoId)
         {
-            await GetContentAsync(videoId, "Audio", GetAudioUriAsync);
+            await GetContentAsync(GetAudioUriAsync);
 
             async Task<string> GetAudioUriAsync()
             {
-                var streamInfoSet = await _youtubeClient.GetVideoMediaStreamInfosAsync(videoId);
-                var audios = streamInfoSet.Audio.Where(audio => audio.AudioEncoding == AudioEncoding.Aac).ToList();
+                var streamManifest = await _youtubeClient.Videos.Streams.GetManifestAsync(videoId);
+                var audios = streamManifest.GetAudioOnlyStreams().ToList();
                 return audios.Count > 0
                     ? audios.MaxBy(audio => audio.Bitrate).Url
                     : null;
             }
         }
 
-        private async Task GetContentAsync(string videoId, string encoding, Func<Task<string>> getContentUriAsync)
+        private async Task<SyndicationFeedFormatter> GetFeedFormatterAsync(Func<string, Task<ItunesFeed>> getFeedAsync)
+        {
+            var transportAddress = OperationContext.Current.IncomingMessageProperties.Via;
+            var baseAddress = $"http://{transportAddress.DnsSafeHost}:{transportAddress.Port}/FeedService";
+
+            WebOperationContext.Current.OutgoingResponse.ContentType = "application/rss+xml; charset=utf-8";
+
+            var feed = await getFeedAsync(baseAddress);
+            return feed.GetRss20Formatter();
+        }
+
+        private async Task GetContentAsync(Func<Task<string>> getContentUriAsync)
         {
             var context = WebOperationContext.Current;
 
-            if (_contentCache.TryGet((videoId, encoding), out var redirectUri))
-            {
-                context.OutgoingResponse.RedirectTo(redirectUri);
-                return;
-            }
-
+            string redirectUri;
             try
             {
                 redirectUri = await getContentUriAsync();
@@ -191,7 +198,6 @@ namespace Service
                 redirectUri = null;
             }
 
-            _contentCache.Set((videoId, encoding), redirectUri);
             context.OutgoingResponse.RedirectTo(redirectUri);
         }
 
@@ -301,13 +307,6 @@ namespace Service
 
         private static string GetTitle(string title, Arguments arguments) =>
             arguments.IsPopular ? $"{title} (By Popularity)" : title;
-
-        private Rss20FeedFormatter CacheFeed(Arguments arguments, SyndicationFeed feed)
-        {
-            var formatter = feed.GetRss20Formatter();
-            _feedCache.Set(arguments, formatter);
-            return formatter;
-        }
 
         private static string GetBaseAddress()
         {
