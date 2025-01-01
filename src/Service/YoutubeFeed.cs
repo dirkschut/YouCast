@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.ServiceModel;
@@ -10,6 +11,7 @@ using System.Xml.Linq;
 using Google.Apis.Services;
 using Google.Apis.YouTube.v3.Data;
 using MoreLinq;
+using YoutubeDLSharp;
 using YoutubeExplode;
 using Video = Google.Apis.YouTube.v3.Data.Video;
 using YouTubeService = Google.Apis.YouTube.v3.YouTubeService;
@@ -28,6 +30,8 @@ namespace Service
 
         private readonly YoutubeClient _youtubeClient;
         private readonly YouTubeService _youtubeService;
+
+        private readonly YoutubeDL _ytdl;
 
         public YoutubeFeed(string applicationName, string apiKey)
         {
@@ -134,29 +138,19 @@ namespace Service
             }
         }
 
-        public async Task GetVideoAsync(string videoId, string encoding)
+        public Stream GetVideoAsync(string videoId, string encoding)
         {
-            await GetContentAsync(GetVideoUriAsync);
+            var transportAddress = OperationContext.Current.IncomingMessageProperties.Via;
+            YoutubeDL ytdl = new YoutubeDL();
+            YoutubeDLSharp.Utils.DownloadBinaries().Wait();
+            ytdl.YoutubeDLPath = "yt-dlp.exe";
+            ytdl.FFmpegPath = "ffmpeg.exe";
+            ytdl.OutputFolder = "output";
+            var video = ytdl.RunVideoDownload("https://www.youtube.com/watch?v=" + videoId).GetAwaiter().GetResult();
 
-            async Task<string> GetVideoUriAsync()
-            {
-                var resolution = 720;
-                try
-                {
-                    resolution = int.Parse(encoding.Remove(encoding.Length - 1).Substring(startIndex: 4));
-                }
-                catch
-                {
-                }
-
-                var streamManifest = await _youtubeClient.Videos.Streams.GetManifestAsync(videoId);
-                var muxedStreamInfos = streamManifest.GetMuxedStreams().ToList();
-                var muxedStreamInfo =
-                    muxedStreamInfos.FirstOrDefault(_ => _.VideoResolution.Height == resolution) ??
-                    muxedStreamInfos.Maxima(_ => _.VideoQuality).FirstOrDefault();
-
-                return muxedStreamInfo?.Url;
-            }
+            FileStream fileStream = File.OpenRead(video.Data);
+            WebOperationContext.Current.OutgoingResponse.ContentType = "video/mp4";
+            return fileStream;
         }
 
         public async Task GetAudioAsync(string videoId)

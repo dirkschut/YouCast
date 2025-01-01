@@ -1,4 +1,5 @@
-﻿using System.ServiceModel;
+﻿using System.IO;
+using System.ServiceModel;
 using System.ServiceModel.Syndication;
 using System.ServiceModel.Web;
 using System.Threading.Tasks;
@@ -32,7 +33,7 @@ namespace Service
 
         [OperationContract]
         [WebGet(UriTemplate = "Video.mp4?videoId={videoId}&encoding={encoding}")]
-        Task GetVideoAsync(string videoId, string encoding);
+        Stream GetVideoAsync(string videoId, string encoding);
 
         [OperationContract]
         [WebGet(UriTemplate = "Audio.m4a?videoId={videoId}")]
