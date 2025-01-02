@@ -178,7 +178,7 @@ namespace Service
                     ytdl.FFmpegPath = "ffmpeg.exe";
                     ytdl.OutputFolder = "output";
 
-                    OptionSet options = new OptionSet { Format = "bv*[height<=720]+ba/b[height<=720] / wv*+ba/w" };
+                    OptionSet options = new OptionSet { Format = "b[filesize<250M] / w" };
 
                     var video = ytdl.RunVideoDownload("https://www.youtube.com/watch?v=" + videoId, overrideOptions: options).GetAwaiter().GetResult();
 
