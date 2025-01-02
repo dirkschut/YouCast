@@ -62,6 +62,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="**\*.cs" Exclude="obj\**" />
+    <Compile Include="Logger.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

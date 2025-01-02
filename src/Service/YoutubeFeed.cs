@@ -39,6 +39,7 @@ namespace Service
 
         public YoutubeFeed(string applicationName, string apiKey)
         {
+            Logger.Log("YoutubeFeed constructor called");
             _youtubeClient = new YoutubeClient();
             _youtubeService =
                 new YouTubeService(
@@ -55,6 +56,7 @@ namespace Service
             int maxLength,
             bool isPopular)
         {
+            Logger.Log("GetUserFeedAsync called");
             return await GetFeedFormatterAsync(GetFeedAsync);
 
             async Task<ItunesFeed> GetFeedAsync(string baseAddress)
@@ -68,6 +70,9 @@ namespace Service
                     encoding,
                     maxLength,
                     isPopular);
+
+                Logger.Log($"Arguments: {arguments}");
+                Logger.Log($"Channel: {channel.Snippet.Title}");
 
                 return new ItunesFeed(
                     GetTitle(channel.Snippet.Title, arguments),
@@ -84,6 +89,7 @@ namespace Service
 
             async Task<Channel> GetChannelAsync(string id)
             {
+                Logger.Log($"GetChannelAsync called with id: {id}");
                 var listRequestForId = _youtubeService.Channels.List("snippet,contentDetails");
                 listRequestForId.Id = id;
                 listRequestForId.MaxResults = 1;
@@ -95,6 +101,7 @@ namespace Service
 
             async Task<Channel> FindChannelAsync(string username)
             {
+                Logger.Log($"FindChannelAsync called with username: {username}");
                 var listRequestForUsername = _youtubeService.Channels.List("snippet,contentDetails");
                 listRequestForUsername.ForUsername = username;
                 listRequestForUsername.MaxResults = 1;
@@ -111,79 +118,109 @@ namespace Service
             int maxLength,
             bool isPopular)
         {
+            Logger.Log("GetPlaylistFeedAsync called");
             return await GetFeedFormatterAsync(GetFeedAsync);
 
             async Task<ItunesFeed> GetFeedAsync(string baseAddress)
             {
-                var arguments =
-                    new Arguments(
-                        playlistId,
-                        encoding,
-                        maxLength,
-                        isPopular);
-
-                var playlistRequest = _youtubeService.Playlists.List("snippet");
-                playlistRequest.Id = playlistId;
-                playlistRequest.MaxResults = 1;
-
-                var playlist = (await playlistRequest.ExecuteAsync()).Items.First();
-
-                return new ItunesFeed(
-                    GetTitle(playlist.Snippet.Title, arguments),
-                    playlist.Snippet.Description,
-                    new Uri(string.Format(_playlistUrlFormat, playlist.Id)))
+                try
                 {
-                    ImageUrl = new Uri(playlist.Snippet.Thumbnails.Medium.Url),
-                    Items = await GenerateItemsAsync(
-                        baseAddress,
-                        playlist.Snippet.PublishedAtDateTimeOffset.GetValueOrDefault().UtcDateTime,
-                        arguments)
-                };
+                    var arguments =
+                        new Arguments(
+                            playlistId,
+                            encoding,
+                            maxLength,
+                            isPopular);
+
+                    var playlistRequest = _youtubeService.Playlists.List("snippet");
+                    playlistRequest.Id = playlistId;
+                    playlistRequest.MaxResults = 1;
+
+                    var playlist = (await playlistRequest.ExecuteAsync()).Items.First();
+
+                    Logger.Log($"Arguments: {arguments}");
+                    Logger.Log($"Playlist: {playlist.Snippet.Title}");
+
+                    return new ItunesFeed(
+                        GetTitle(playlist.Snippet.Title, arguments),
+                        playlist.Snippet.Description,
+                        new Uri(string.Format(_playlistUrlFormat, playlist.Id)))
+                    {
+                        ImageUrl = new Uri(playlist.Snippet.Thumbnails.Medium.Url),
+                        Items = await GenerateItemsAsync(
+                            baseAddress,
+                            playlist.Snippet.PublishedAtDateTimeOffset.GetValueOrDefault().UtcDateTime,
+                            arguments)
+                    };
+                }
+                catch (Exception e)
+                {
+                    Logger.Log(e.Message, true);
+                    return null;
+                }
             }
         }
 
         public System.IO.Stream GetVideoAsync(string videoId, string encoding)
         {
-            var newLocation = "output/" + videoId + ".mp4";
+            Logger.Log("GetVideoAsync called");
+            var newLocation = "output/" + videoId + ".webm";
             var tempLocation = "output/" + videoId + ".temp";
-            if (!File.Exists(newLocation) && !File.Exists(tempLocation))
-            {
-                File.Create(tempLocation).Close();
-                var transportAddress = OperationContext.Current.IncomingMessageProperties.Via;
-                YoutubeDL ytdl = new YoutubeDL();
-                YoutubeDLSharp.Utils.DownloadBinaries().Wait();
-                ytdl.YoutubeDLPath = "yt-dlp.exe";
-                ytdl.FFmpegPath = "ffmpeg.exe";
-                ytdl.OutputFolder = "output";
 
-                OptionSet options = new OptionSet { Format = "bv*[height<=720]+ba/b[height<=720] / wv*+ba/w" };
+            try {
+                if (!File.Exists(newLocation) && !File.Exists(tempLocation))
+                {
+                    File.Create(tempLocation).Close();
+                    var transportAddress = OperationContext.Current.IncomingMessageProperties.Via;
+                    YoutubeDL ytdl = new YoutubeDL();
+                    YoutubeDLSharp.Utils.DownloadBinaries().Wait();
+                    ytdl.YoutubeDLPath = "yt-dlp.exe";
+                    ytdl.FFmpegPath = "ffmpeg.exe";
+                    ytdl.OutputFolder = "output";
 
-                var video = ytdl.RunVideoDownload("https://www.youtube.com/watch?v=" + videoId, recodeFormat: YoutubeDLSharp.Options.VideoRecodeFormat.Mp4, overrideOptions: options).GetAwaiter().GetResult();
-                File.Move(video.Data, newLocation);
-                File.Delete(tempLocation);
+                    OptionSet options = new OptionSet { Format = "bv*[height<=720]+ba/b[height<=720] / wv*+ba/w" };
+
+                    var video = ytdl.RunVideoDownload("https://www.youtube.com/watch?v=" + videoId, overrideOptions: options).GetAwaiter().GetResult();
+
+                    Logger.Log("Downloaded video: " + video.Data);
+
+                    File.Move(video.Data, newLocation);
+                    File.Delete(tempLocation);
+                }
+                else
+                {
+                    Logger.Log("Video already exists");
+                }
+
+
+                //FileStream fileStream = File.OpenRead(newLocation);
+                //WebOperationContext.Current.OutgoingResponse.ContentType = "video/mp4";
+
+                OutgoingWebResponseContext context = WebOperationContext.Current.OutgoingResponse;
+                context.Headers.Add(System.Net.HttpResponseHeader.CacheControl, "public");
+                context.ContentType = "video/webm";
+                context.LastModified = File.GetLastWriteTime(newLocation);
+                context.StatusCode = HttpStatusCode.OK;
+                context.ContentLength = new FileInfo(newLocation).Length;
+                return new MemoryStream(File.ReadAllBytes(newLocation));
             }
-
-
-            //FileStream fileStream = File.OpenRead(newLocation);
-            //WebOperationContext.Current.OutgoingResponse.ContentType = "video/mp4";
-
-            OutgoingWebResponseContext context = WebOperationContext.Current.OutgoingResponse;
-            context.Headers.Add(System.Net.HttpResponseHeader.CacheControl, "public");
-            context.ContentType = "video/mp4";
-            context.LastModified = File.GetLastWriteTime(newLocation);
-            context.StatusCode = HttpStatusCode.OK;
-            context.ContentLength = new FileInfo(newLocation).Length;
-            return new MemoryStream(File.ReadAllBytes(newLocation));
+            catch (Exception e)
+            {
+                Logger.Log(e.Message, true);
+                return null;
+            }
         }
 
         public async Task GetAudioAsync(string videoId)
         {
+            Logger.Log("GetAudioAsync called");
             await GetContentAsync(GetAudioUriAsync);
 
             async Task<string> GetAudioUriAsync()
             {
                 var streamManifest = await _youtubeClient.Videos.Streams.GetManifestAsync(videoId);
                 var audios = streamManifest.GetAudioOnlyStreams().ToList();
+
                 return audios.Count > 0
                     ? audios.Maxima(audio => audio.Bitrate).FirstOrDefault().Url
                     : null;
@@ -192,6 +229,8 @@ namespace Service
 
         private async Task<SyndicationFeedFormatter> GetFeedFormatterAsync(Func<string, Task<ItunesFeed>> getFeedAsync)
         {
+            Logger.Log("GetFeedFormatterAsync called");
+
             var transportAddress = OperationContext.Current.IncomingMessageProperties.Via;
             var baseAddress = $"http://{transportAddress.DnsSafeHost}:{transportAddress.Port}/FeedService";
 
@@ -203,6 +242,7 @@ namespace Service
 
         private async Task GetContentAsync(Func<Task<string>> getContentUriAsync)
         {
+            Logger.Log("GetContentAsync called");
             var context = WebOperationContext.Current;
 
             string redirectUri;
@@ -223,6 +263,8 @@ namespace Service
             DateTime startDate,
             Arguments arguments)
         {
+            Logger.Log("GenerateItemsAsync called");
+
             IEnumerable<PlaylistItem> playlistItems = (await GetPlaylistItemsAsync(arguments)).ToList();
             var userVideos = playlistItems.Select(_ => GenerateItem(_, baseAddress, arguments));
             if (arguments.IsPopular)
@@ -235,6 +277,8 @@ namespace Service
 
         private async Task<IEnumerable<PlaylistItem>> GetPlaylistItemsAsync(Arguments arguments)
         {
+            Logger.Log("GetPlaylistItemsAsync called");
+
             var playlistItems = new List<PlaylistItem>();
             var nextPageToken = string.Empty;
             while (nextPageToken != null && playlistItems.Count < arguments.MaxLength)
@@ -255,6 +299,8 @@ namespace Service
 
         private static SyndicationItem GenerateItem(PlaylistItem playlistItem, string baseAddress, Arguments arguments)
         {
+            Logger.Log("GenerateItem called");
+
             var item = new SyndicationItem(
                 playlistItem.Snippet.Title,
                 string.Empty,
@@ -294,6 +340,7 @@ namespace Service
             IEnumerable<PlaylistItem> playlistItems,
             DateTime startDate)
         {
+            Logger.Log("SortByPopularityAsync called");
             var videos = await GetVideosAsync(playlistItems.Select(_ => _.Snippet.ResourceId.VideoId).Distinct());
             var videoDictionary = videos.ToDictionary(_ => _.Id, _ => _);
             userVideos = userVideos.
@@ -315,6 +362,8 @@ namespace Service
 
         private async Task<IEnumerable<Video>> GetVideoBatchAsync(IEnumerable<string> videoIds)
         {
+            Logger.Log("GetVideoBatchAsync called");
+
             var statisticsRequest = _youtubeService.Videos.List("statistics");
             statisticsRequest.Id = string.Join(",", videoIds);
             statisticsRequest.MaxResults = 50;
