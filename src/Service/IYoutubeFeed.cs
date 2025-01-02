@@ -32,8 +32,8 @@ namespace Service
             bool isPopular);
 
         [OperationContract]
-        [WebGet(UriTemplate = "Video.mp4?videoId={videoId}&encoding={encoding}")]
-        Stream GetVideoAsync(string videoId, string encoding);
+        [WebGet(UriTemplate = "Video.mp4?videoId={videoId}&encoding={encoding}", BodyStyle = WebMessageBodyStyle.Bare)]
+        System.IO.Stream GetVideoAsync(string videoId, string encoding);
 
         [OperationContract]
         [WebGet(UriTemplate = "Audio.m4a?videoId={videoId}")]

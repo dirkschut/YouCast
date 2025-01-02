@@ -3,15 +3,19 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.ServiceModel;
 using System.ServiceModel.Syndication;
 using System.ServiceModel.Web;
 using System.Threading.Tasks;
+using System.Web;
 using System.Xml.Linq;
 using Google.Apis.Services;
 using Google.Apis.YouTube.v3.Data;
 using MoreLinq;
 using YoutubeDLSharp;
+using YoutubeDLSharp.Metadata;
+using YoutubeDLSharp.Options;
 using YoutubeExplode;
 using Video = Google.Apis.YouTube.v3.Data.Video;
 using YouTubeService = Google.Apis.YouTube.v3.YouTubeService;
@@ -138,19 +142,38 @@ namespace Service
             }
         }
 
-        public Stream GetVideoAsync(string videoId, string encoding)
+        public System.IO.Stream GetVideoAsync(string videoId, string encoding)
         {
-            var transportAddress = OperationContext.Current.IncomingMessageProperties.Via;
-            YoutubeDL ytdl = new YoutubeDL();
-            YoutubeDLSharp.Utils.DownloadBinaries().Wait();
-            ytdl.YoutubeDLPath = "yt-dlp.exe";
-            ytdl.FFmpegPath = "ffmpeg.exe";
-            ytdl.OutputFolder = "output";
-            var video = ytdl.RunVideoDownload("https://www.youtube.com/watch?v=" + videoId).GetAwaiter().GetResult();
+            var newLocation = "output/" + videoId + ".mp4";
+            var tempLocation = "output/" + videoId + ".temp";
+            if (!File.Exists(newLocation) && !File.Exists(tempLocation))
+            {
+                File.Create(tempLocation).Close();
+                var transportAddress = OperationContext.Current.IncomingMessageProperties.Via;
+                YoutubeDL ytdl = new YoutubeDL();
+                YoutubeDLSharp.Utils.DownloadBinaries().Wait();
+                ytdl.YoutubeDLPath = "yt-dlp.exe";
+                ytdl.FFmpegPath = "ffmpeg.exe";
+                ytdl.OutputFolder = "output";
 
-            FileStream fileStream = File.OpenRead(video.Data);
-            WebOperationContext.Current.OutgoingResponse.ContentType = "video/mp4";
-            return fileStream;
+                OptionSet options = new OptionSet { Format = "bv*[height<=480]+ba/b[height<=480] / wv*+ba/w" };
+
+                var video = ytdl.RunVideoDownload("https://www.youtube.com/watch?v=" + videoId, recodeFormat: YoutubeDLSharp.Options.VideoRecodeFormat.Mp4, overrideOptions: options).GetAwaiter().GetResult();
+                File.Move(video.Data, newLocation);
+                File.Delete(tempLocation);
+            }
+
+
+            //FileStream fileStream = File.OpenRead(newLocation);
+            //WebOperationContext.Current.OutgoingResponse.ContentType = "video/mp4";
+
+            OutgoingWebResponseContext context = WebOperationContext.Current.OutgoingResponse;
+            context.Headers.Add(System.Net.HttpResponseHeader.CacheControl, "public");
+            context.ContentType = "video/mp4";
+            context.LastModified = File.GetLastWriteTime(newLocation);
+            context.StatusCode = HttpStatusCode.OK;
+            context.ContentLength = new FileInfo(newLocation).Length;
+            return new MemoryStream(File.ReadAllBytes(newLocation));
         }
 
         public async Task GetAudioAsync(string videoId)
